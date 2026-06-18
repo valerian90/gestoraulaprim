@@ -185,6 +185,44 @@
       color: white;
     }
 
+    .group-context-popup {
+      position: absolute;
+      z-index: 38;
+      display: grid;
+      gap: 6px;
+      min-width: 150px;
+      border: 3px solid #243147;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .97);
+      box-shadow: 0 8px 0 rgba(33, 48, 73, .16), 0 16px 32px rgba(33, 48, 73, .18);
+      padding: 7px;
+      pointer-events: auto;
+    }
+
+    .group-context-popup.hidden {
+      display: none;
+    }
+
+    .group-context-popup button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border: 2px solid #243147;
+      border-radius: 7px;
+      background: #edf7ff;
+      padding: 7px 9px;
+      font-size: 12px;
+      font-weight: 900;
+      color: #213049;
+      box-shadow: 0 3px 0 rgba(33, 48, 73, .14);
+      text-align: left;
+    }
+
+    .group-context-popup button:hover {
+      background: #ffd15c;
+    }
+
     .date-poster {
       pointer-events: auto;
       position: absolute;
@@ -903,6 +941,10 @@
         <button data-popup-window-state="half" type="button">Half</button>
         <button data-popup-window-state="closed" type="button">Closed</button>
       </div>
+      <div id="groupContextPopup" class="group-context-popup hidden" aria-label="Group options">
+        <button data-group-context-action="edit" type="button">Edit <span>→</span></button>
+        <button data-group-context-action="show-names" type="button">Show names <span>⌁</span></button>
+      </div>
       <div id="readingOverlay" class="reading-overlay hidden"></div>
       <div class="toast hidden px-4 py-3 text-sm font-bold" id="hintToast"></div>
       <div id="readingModeBanner" class="mode-banner hidden px-4 py-3 text-center">
@@ -1267,6 +1309,16 @@
       </div>
     </div>
   </div>
+  <div id="deleteGroupModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="deleteGroupModalTitle">
+    <div class="confirm-modal p-4">
+      <h2 id="deleteGroupModalTitle" class="font-display text-2xl font-extrabold">Delete group</h2>
+      <p id="deleteGroupModalText" class="mt-2 text-sm font-bold text-slate-600">This table group and its students will be removed.</p>
+      <div class="mt-4 grid grid-cols-2 gap-2">
+        <button class="action-btn bg-white px-3 py-2 font-black" id="cancelDeleteGroupBtn" type="button">Cancel</button>
+        <button class="action-btn bg-[#ff7770] px-3 py-2 font-black text-white" id="confirmDeleteGroupBtn" type="button">Delete</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const svg = document.getElementById('roomSvg');
@@ -1294,6 +1346,10 @@
     let highlightedWinnerId = null;
     let highlightedWinnerTimer = null;
     let randomizerExcludedIds = new Set();
+    let expandedNameGroupIds = new Set();
+    let contextGroupId = null;
+    let managementOpenGroupId = null;
+    let pendingDeleteGroupId = null;
     let pendingExcludedWinnerId = null;
     let activeClassMode = null;
     let previousStageBackground = '';
@@ -1692,6 +1748,28 @@
       return icons;
     }
 
+    function rewardSummaryPlain(item) {
+      const rewards = item.rewards || {};
+      const parts = [];
+      const goldStars = Number(rewards.goldStars || (rewards.goldStar ? 1 : 0));
+      if (goldStars) parts.push(`${goldStars}★`);
+      if (rewards.goldBook) parts.push('Book');
+      if (rewards.goldThumb) parts.push('Thumb');
+      if (rewards.ukFlag) parts.push('UK');
+      return parts.join(' · ');
+    }
+
+    function rewardSummaryMarkup(item) {
+      const rewards = item.rewards || {};
+      const chips = [];
+      const goldStars = Number(rewards.goldStars || (rewards.goldStar ? 1 : 0));
+      if (goldStars) chips.push(`<span class="rounded-md border-2 border-[#213049]/20 bg-[#fff1a8] px-2 py-0.5 text-xs font-black text-[#8a5a00]">${goldStars} ★</span>`);
+      if (rewards.goldBook) chips.push('<span class="rounded-md border-2 border-[#213049]/20 bg-[#dff3ff] px-2 py-0.5 text-xs font-black text-[#17324d]">📖 Book</span>');
+      if (rewards.goldThumb) chips.push('<span class="rounded-md border-2 border-[#213049]/20 bg-[#d8ffe8] px-2 py-0.5 text-xs font-black text-[#123626]">👍 Thumb</span>');
+      if (rewards.ukFlag) chips.push('<span class="rounded-md border-2 border-[#213049]/20 bg-[#174a9c] px-2 py-0.5 text-xs font-black text-white">UK</span>');
+      return chips.length ? `<div class="mt-1 flex flex-wrap gap-1">${chips.join('')}</div>` : '';
+    }
+
     function compactRewardTheme(item) {
       const rewards = item.rewards || {};
       const types = [
@@ -1737,21 +1815,21 @@
       }, parent).textContent = reward.text;
     }
 
-    function drawRewardCounter(parent, count, x, y, groupColor) {
+    function drawRewardCounter(parent, count, x, y, groupColor, scale = 1) {
       el('circle', {
         cx: x,
         cy: y,
-        r: 10,
+        r: 10 * scale,
         fill: '#ffffff',
         stroke: groupColor || '#7ee4a8',
-        'stroke-width': 2,
+        'stroke-width': 2 * scale,
         'pointer-events': 'none'
       }, parent);
       el('text', {
         x,
-        y: y + 4,
+        y: y + 4 * scale,
         fill: '#213049',
-        'font-size': 10,
+        'font-size': 10 * scale,
         'font-weight': 900,
         'text-anchor': 'middle',
         'pointer-events': 'none'
@@ -2203,7 +2281,7 @@
         const groupCenterY = (minY + maxY) / 2;
         const deskCenterX = item.x + item.w / 2;
         const deskCenterY = item.y + item.d / 2;
-        const compact = !showAllNameLabels;
+        const compact = !(showAllNameLabels || expandedNameGroupIds.has(item.groupId));
         if (compact) {
           const initials = label.split(/\s+/).slice(0, 2).map(part => part[0] || '').join('').toUpperCase();
           const badge = iso(deskCenterX, deskCenterY, item.h + .16);
@@ -2264,17 +2342,19 @@
           }
           return;
         }
-        const offsetX = deskCenterX < groupCenterX ? -30 : deskCenterX > groupCenterX ? 30 : 0;
-        const offsetY = deskCenterY < groupCenterY ? -22 : deskCenterY > groupCenterY ? 22 : 42;
-        const labelWidth = 156;
+        const offsetX = deskCenterX < groupCenterX ? -24 : deskCenterX > groupCenterX ? 24 : 0;
+        const offsetY = deskCenterY < groupCenterY ? -16 : deskCenterY > groupCenterY ? 16 : 30;
+        const labelWidth = 126;
         const labelX = anchor.x + offsetX + Number(item.nameLabelDx || 0);
-        const labelY = anchor.y - height - 12 + offsetY + Number(item.nameLabelDy || 0);
-        const labelTop = labelY - 32;
-        const labelHeight = 42;
-        const rewardBandHeight = 17;
+        const labelY = anchor.y - height - 8 + offsetY + Number(item.nameLabelDy || 0);
+        const labelTop = labelY - 24;
+        const labelHeight = 34;
+        const rewardBandHeight = 13;
         const pointerEnd = iso(deskCenterX, deskCenterY, item.h + .08);
         const isWinner = highlightedWinnerId === item.id;
         const isExcluded = randomizerExcludedIds.has(item.id);
+        const rewardIcons = rewardIconsFor(item);
+        const hasRewards = rewardIcons.length > 0;
         const labelGroup = el('g', { class: `desk-name-label ${isWinner ? 'winner-label' : ''}`, 'data-desk-name-label': item.id }, g);
         el('line', {
           x1: labelX,
@@ -2290,21 +2370,35 @@
         el('circle', {
           cx: pointerEnd.x,
           cy: pointerEnd.y,
-          r: 5,
+          r: hasRewards ? 6 : 5,
           fill: isExcluded ? '#cbd5e1' : item.groupColor || '#7ee4a8',
-          stroke: isExcluded ? '#64748b' : '#213049',
-          'stroke-width': 2,
+          stroke: isExcluded ? '#64748b' : hasRewards ? '#f5b301' : '#213049',
+          'stroke-width': hasRewards ? 3 : 2,
           'pointer-events': 'none'
         }, labelGroup);
+        if (hasRewards && !isExcluded) {
+          el('rect', {
+            x: labelX - labelWidth / 2 - 4,
+            y: labelTop - 4,
+            width: labelWidth + 8,
+            height: labelHeight + 8,
+            rx: 12,
+            fill: '#fff1a8',
+            opacity: .42,
+            stroke: '#f5b301',
+            'stroke-width': 2,
+            'pointer-events': 'none'
+          }, labelGroup);
+        }
         el('rect', {
           x: labelX - labelWidth / 2,
           y: labelTop,
           width: labelWidth,
           height: labelHeight,
           rx: 9,
-          fill: isExcluded ? '#e2e8f0' : isWinner ? '#fff7c2' : '#ffffff',
-          stroke: isExcluded ? '#94a3b8' : isWinner ? '#ff7770' : item.groupColor || '#7ee4a8',
-          'stroke-width': isWinner ? 5 : 3,
+          fill: isExcluded ? '#e2e8f0' : isWinner ? '#fff7c2' : hasRewards ? '#fffdf0' : '#ffffff',
+          stroke: isExcluded ? '#94a3b8' : isWinner ? '#ff7770' : hasRewards ? '#f5b301' : item.groupColor || '#7ee4a8',
+          'stroke-width': isWinner ? 5 : hasRewards ? 4 : 3,
           'pointer-events': 'all'
         }, labelGroup);
         drawNamePlateDecor(labelGroup, item, labelX, labelTop, labelWidth, labelHeight, 'full');
@@ -2314,47 +2408,46 @@
           width: labelWidth - 8,
           height: rewardBandHeight,
           rx: 6,
-          fill: isExcluded ? '#cbd5e1' : item.groupColor || '#7ee4a8',
-          opacity: isExcluded ? .45 : .72,
+          fill: isExcluded ? '#cbd5e1' : hasRewards ? '#f5b301' : item.groupColor || '#7ee4a8',
+          opacity: isExcluded ? .45 : hasRewards ? .88 : .72,
           stroke: 'none',
           'pointer-events': 'none'
         }, labelGroup);
         el('circle', {
-          cx: labelX - labelWidth / 2 + 16,
-          cy: labelY - 2,
-          r: 13,
+          cx: labelX - labelWidth / 2 + 14,
+          cy: labelY - 1,
+          r: 10,
           fill: isExcluded ? '#cbd5e1' : item.groupColor || '#7ee4a8',
           class: 'outline-ink',
           'pointer-events': 'all'
         }, labelGroup);
         el('text', {
-          x: labelX - labelWidth / 2 + 16,
+          x: labelX - labelWidth / 2 + 14,
           y: labelY + 3,
           fill: isExcluded ? '#64748b' : '#213049',
-          'font-size': 13,
+          'font-size': 11,
           'font-weight': 900,
           'text-anchor': 'middle',
           'pointer-events': 'none'
         }, labelGroup).textContent = seatNumber;
         el('text', {
-          x: labelX + 14,
+          x: labelX + 10,
           y: labelY + 3,
           fill: isExcluded ? '#64748b' : isWinner ? '#b42318' : '#213049',
-          'font-size': 14,
+          'font-size': 12,
           'font-weight': 900,
           'text-anchor': 'middle',
-          'textLength': Math.min(labelWidth - 58, Math.max(28, label.length * 8)),
+          'textLength': Math.min(labelWidth - 46, Math.max(24, label.length * 6.8)),
           'lengthAdjust': 'spacingAndGlyphs',
           'pointer-events': 'none'
         }, labelGroup).textContent = label;
-        const rewardIcons = rewardIconsFor(item);
-        const visibleRewards = rewardIcons.slice(0, 5);
-        const rewardStartX = labelX - labelWidth / 2 + 19;
+        const visibleRewards = rewardIcons.slice(0, 4);
+        const rewardStartX = labelX - labelWidth / 2 + 16;
         visibleRewards.forEach((reward, rewardIndex) => {
-          drawRewardIcon(labelGroup, reward, rewardStartX + rewardIndex * 25, labelTop + 12, { scale: .9 });
+          drawRewardIcon(labelGroup, reward, rewardStartX + rewardIndex * 18, labelTop + 10, { scale: .62 });
         });
         if (rewardIcons.length > visibleRewards.length) {
-          drawRewardCounter(labelGroup, rewardIcons.length - visibleRewards.length, rewardStartX + visibleRewards.length * 25, labelTop + 12, item.groupColor);
+          drawRewardCounter(labelGroup, rewardIcons.length - visibleRewards.length, rewardStartX + visibleRewards.length * 18, labelTop + 10, item.groupColor, .75);
         }
         labelGroup.addEventListener('pointerdown', startDragNameLabel);
         labelGroup.addEventListener('click', event => event.stopPropagation());
@@ -2382,6 +2475,7 @@
         'pointer-events': 'none'
       }, g).textContent = group.number;
       g.addEventListener('pointerdown', startDragDeskGroupBadge);
+      g.addEventListener('contextmenu', openGroupContextPopup);
       g.addEventListener('click', event => event.stopPropagation());
     }
 
@@ -2732,7 +2826,8 @@
       students.forEach(item => {
         const option = document.createElement('option');
         option.value = item.id;
-        option.textContent = `${item.studentName.trim()} · ${item.groupLabel || 'Group'}`;
+        const rewardSummary = rewardSummaryPlain(item);
+        option.textContent = `${item.studentName.trim()} · ${item.groupLabel || 'Group'}${rewardSummary ? ` · ${rewardSummary}` : ''}`;
         option.selected = item.id === currentValue;
         selector.appendChild(option);
       });
@@ -2906,7 +3001,7 @@
           ? namedDesks.map(desk => desk.studentName.trim()).join(', ')
           : 'Sin alumnos';
         return `
-          <details class="rounded-lg border-2 border-[#243147]/15 bg-white/75 p-3" data-desk-group="${group.id}">
+          <details class="rounded-lg border-2 border-[#243147]/15 bg-white/75 p-3" data-desk-group="${group.id}" ${group.id === managementOpenGroupId ? 'open' : ''}>
             <summary class="flex cursor-pointer items-center justify-between gap-2 font-black">
               <span class="min-w-0">
                 <span class="flex items-center gap-2">
@@ -2915,7 +3010,12 @@
                 </span>
                 <span class="mt-1 block truncate text-xs font-black text-slate-500">${escapeAttr(summaryNames)}</span>
               </span>
-              <span class="shrink-0 rounded-md bg-white px-2 py-1 text-xs text-slate-500">${group.desks.length} mesas</span>
+              <span class="flex shrink-0 items-center gap-2">
+                <span class="rounded-md bg-white px-2 py-1 text-xs text-slate-500">${group.desks.length} mesas</span>
+                <button class="rounded-md border-2 border-[#243147] bg-[#ff7770] p-1.5 text-white shadow-sm" data-delete-desk-group="${group.id}" type="button" title="Delete group" aria-label="Delete group ${group.number}">
+                  <i data-lucide="trash-2" class="h-4 w-4"></i>
+                </button>
+              </span>
             </summary>
             <div class="mt-3 rounded-lg bg-[#edf7ff] p-3">
               <div class="mb-2 flex items-center gap-2 font-black text-[#213049]">
@@ -2924,9 +3024,12 @@
               </div>
               <div class="space-y-2">
                 ${group.desks.map((desk, index) => `
-                  <label class="grid grid-cols-[72px_1fr] items-center gap-2 text-sm font-black text-slate-600">
+                  <label class="grid grid-cols-[64px_1fr] items-start gap-2 text-sm font-black text-slate-600">
                     <span>Mesa ${index + 1}</span>
-                    <input type="text" value="${escapeAttr(desk.studentName || '')}" placeholder="Nombre del alumno" class="w-full rounded-lg border-2 border-[#243147]/20 bg-white px-2 py-2 font-black text-[#213049]" data-desk-student-name="${desk.id}">
+                    <span class="min-w-0">
+                      <input type="text" value="${escapeAttr(desk.studentName || '')}" placeholder="Nombre del alumno" class="w-full rounded-lg border-2 border-[#243147]/20 bg-white px-2 py-2 font-black text-[#213049]" data-desk-student-name="${desk.id}">
+                      ${rewardSummaryMarkup(desk)}
+                    </span>
                   </label>
                 `).join('')}
               </div>
@@ -2934,6 +3037,67 @@
           </details>
         `;
       }).join('');
+    }
+
+    function setLucideButtonIcon(buttonSelector, iconName) {
+      const button = document.querySelector(buttonSelector);
+      const icon = button?.querySelector('[data-lucide]');
+      if (!icon) return;
+      icon.setAttribute('data-lucide', iconName);
+      icon.classList.add('h-5', 'w-5');
+    }
+
+    function openManagementForGroup(groupId) {
+      managementOpenGroupId = groupId;
+      const shell = document.getElementById('appShell');
+      const rightPanel = document.getElementById('rightPanel');
+      const rightToggle = document.getElementById('toggleRightPanelBtn');
+      const rightLabel = document.getElementById('rightPanelToggleLabel');
+      rightPanel.classList.remove('collapsed');
+      shell.classList.remove('panel-collapsed');
+      rightToggle.setAttribute('aria-expanded', 'true');
+      rightToggle.setAttribute('title', 'Hide panel');
+      rightLabel.textContent = 'Hide panel';
+      setLucideButtonIcon('#toggleRightPanelBtn', 'panel-right-close');
+      document.getElementById('editClassPanel').classList.add('hidden');
+      document.getElementById('classManagementPanel').classList.remove('hidden');
+      renderDeskGroupList();
+      const targetDetails = [...document.querySelectorAll('[data-desk-group]')]
+        .find(details => details.dataset.deskGroup === groupId);
+      if (targetDetails) {
+        targetDetails.open = true;
+        targetDetails.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function openDeleteGroupModal(groupId) {
+      const group = getDeskGroups().find(item => item.id === groupId);
+      if (!group) return;
+      pendingDeleteGroupId = groupId;
+      document.getElementById('deleteGroupModalText').textContent = `Delete Group ${group.number}? This will remove its tables, students and rewards.`;
+      document.getElementById('deleteGroupModal').classList.remove('hidden');
+    }
+
+    function closeDeleteGroupModal() {
+      pendingDeleteGroupId = null;
+      document.getElementById('deleteGroupModal').classList.add('hidden');
+    }
+
+    function deleteDeskGroup(groupId) {
+      const desks = state.objects.filter(item => item.type === 'desk' && item.groupId === groupId);
+      if (!desks.length) return;
+      state.objects = state.objects.filter(item => !(item.type === 'desk' && item.groupId === groupId));
+      if (desks.some(item => item.id === selectedId)) selectedId = null;
+      expandedNameGroupIds.delete(groupId);
+      if (managementOpenGroupId === groupId) managementOpenGroupId = null;
+      if (contextGroupId === groupId) hideGroupContextPopup();
+      renderDeskGroupList();
+      renderRewardStudentSelect();
+      renderGroupRewardsList();
+      renderShop();
+      render();
+      showHint('Group deleted');
     }
 
     function renderSelectedControls(current) {
@@ -3394,6 +3558,7 @@
 
     function startDragDeskGroupBadge(event) {
       event.stopPropagation();
+      if (event.button === 2) return;
       const groupId = event.currentTarget.dataset.deskGroupBadge;
       const desks = state.objects.filter(item => item.type === 'desk' && item.groupId === groupId);
       if (!desks.length) return;
@@ -3406,6 +3571,44 @@
       selectedId = desks[0].id;
       svg.classList.add('dragging');
       event.currentTarget.setPointerCapture(event.pointerId);
+    }
+
+    function toggleGroupNameLabels(groupId) {
+      if (!groupId) return;
+      if (expandedNameGroupIds.has(groupId)) {
+        expandedNameGroupIds.delete(groupId);
+        showHint('Group names hidden');
+      } else {
+        expandedNameGroupIds.add(groupId);
+        showHint('Group names shown');
+      }
+      deskGroupDrag = null;
+      svg.classList.remove('dragging');
+      render();
+    }
+
+    function hideGroupContextPopup() {
+      const popup = document.getElementById('groupContextPopup');
+      if (popup) popup.classList.add('hidden');
+      contextGroupId = null;
+    }
+
+    function openGroupContextPopup(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      const groupId = event.currentTarget.dataset.deskGroupBadge;
+      if (!groupId) return;
+      contextGroupId = groupId;
+      deskGroupDrag = null;
+      svg.classList.remove('dragging');
+      const popup = document.getElementById('groupContextPopup');
+      const stage = document.querySelector('.stage-wrap');
+      const stageRect = stage.getBoundingClientRect();
+      const left = Math.max(8, Math.min(event.clientX - stageRect.left + 8, stage.clientWidth - 170));
+      const top = Math.max(8, Math.min(event.clientY - stageRect.top + 8, stage.clientHeight - 92));
+      popup.style.left = `${left}px`;
+      popup.style.top = `${top}px`;
+      popup.classList.remove('hidden');
     }
 
     function startDragNameLabel(event) {
@@ -3596,13 +3799,12 @@
       const shell = document.getElementById('appShell');
       const panel = document.getElementById('rightPanel');
       const label = document.getElementById('rightPanelToggleLabel');
-      const icon = document.querySelector('#toggleRightPanelBtn i');
       const collapsed = panel.classList.toggle('collapsed');
       shell.classList.toggle('panel-collapsed', collapsed);
       document.getElementById('toggleRightPanelBtn').setAttribute('aria-expanded', String(!collapsed));
       document.getElementById('toggleRightPanelBtn').setAttribute('title', collapsed ? 'Show panel' : 'Hide panel');
       label.textContent = collapsed ? 'Show panel' : 'Hide panel';
-      icon.setAttribute('data-lucide', collapsed ? 'panel-right-open' : 'panel-right-close');
+      setLucideButtonIcon('#toggleRightPanelBtn', collapsed ? 'panel-right-open' : 'panel-right-close');
       if (window.lucide) lucide.createIcons();
     });
 
@@ -3615,6 +3817,26 @@
       item.windowState = button.dataset.popupWindowState;
       item.assetFile = variant.file;
       render();
+    });
+
+    document.getElementById('groupContextPopup').addEventListener('pointerdown', (event) => {
+      const button = event.target.closest('[data-group-context-action]');
+      if (!button || !contextGroupId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const groupId = contextGroupId;
+      hideGroupContextPopup();
+      if (button.dataset.groupContextAction === 'edit') {
+        openManagementForGroup(groupId);
+        showHint('Group opened for editing');
+      }
+      if (button.dataset.groupContextAction === 'show-names') {
+        toggleGroupNameLabels(groupId);
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      if (!event.target.closest('#groupContextPopup')) hideGroupContextPopup();
     });
 
     function toggleHiddenCard(cardId, onOpen) {
@@ -3795,6 +4017,7 @@
 
     document.getElementById('toggleNamesBtn').addEventListener('click', () => {
       showAllNameLabels = !showAllNameLabels;
+      if (!showAllNameLabels) expandedNameGroupIds.clear();
       document.getElementById('toggleNamesLabel').textContent = showAllNameLabels ? 'Hide names' : 'Show names';
       render();
     });
@@ -3978,6 +4201,14 @@
       desk.studentName = event.target.value;
       renderRewardStudentSelect();
       render(true);
+    });
+
+    document.getElementById('classManagementPanel').addEventListener('click', (event) => {
+      const deleteButton = event.target.closest('[data-delete-desk-group]');
+      if (!deleteButton) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openDeleteGroupModal(deleteButton.dataset.deleteDeskGroup);
     });
 
     window.addEventListener('pointermove', (event) => {
@@ -4202,6 +4433,18 @@
 
     document.getElementById('resetModal').addEventListener('click', (event) => {
       if (event.target.id === 'resetModal') event.currentTarget.classList.add('hidden');
+    });
+
+    document.getElementById('cancelDeleteGroupBtn').addEventListener('click', closeDeleteGroupModal);
+
+    document.getElementById('confirmDeleteGroupBtn').addEventListener('click', () => {
+      const groupId = pendingDeleteGroupId;
+      closeDeleteGroupModal();
+      if (groupId) deleteDeskGroup(groupId);
+    });
+
+    document.getElementById('deleteGroupModal').addEventListener('click', (event) => {
+      if (event.target.id === 'deleteGroupModal') closeDeleteGroupModal();
     });
 
     document.getElementById('saveClassBtn').addEventListener('click', saveClass);
